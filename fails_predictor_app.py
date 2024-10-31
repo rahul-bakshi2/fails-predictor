@@ -287,11 +287,11 @@ def main():
     
     try:
         # Debug: Print available secrets
-        st.write("Available secrets:", st.secrets.keys())
+        st.write("Available secrets:", list(st.secrets))
     
-    # Initialize components
-    api_key = st.secrets.get("POLYGON_API_KEY")
-    if not api_key:
+        # Try to get API key
+        api_key = st.secrets.get("POLYGON_API_KEY", None)
+        if not api_key:
         st.error("POLYGON_API_KEY not found in secrets. Please check your configuration.")
         st.info("Using demo mode with limited functionality.")
         api_key = "demo_key"  # Fallback for testing
