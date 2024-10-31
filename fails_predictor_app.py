@@ -289,7 +289,7 @@ def main():
     """)
     
     # Initialize components
-    api_key = st.secrets["GagEdedMweleH8AEdqhMwNvxaz9rRq5f"]
+    api_key = st.secrets["POLYGON_API_KEY"]
     market_fetcher = MarketDataFetcher(api_key)
     risk_analyzer = RiskAnalyzer()
     
