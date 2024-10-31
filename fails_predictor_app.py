@@ -124,7 +124,13 @@ class PCFValidator:
         for col, dtype in PCFValidator.REQUIRED_COLUMNS.items():
             try:
                 if dtype == float:
-                    df[col] = pd.to_numeric(df[col].str.replace('$', '').str.replace(',', ''))
+                    # Handle if already numeric
+                    if pd.api.types.is_numeric_dtype(df[col]):
+                        df[col] = df[col].astype(float)
+                    else:
+                        # Handle string format with currency and percentage symbols
+                        df[col] = df[col].replace('[\$,%]', '', regex=True)
+                        df[col] = pd.to_numeric(df[col])
                 elif dtype == str:
                     df[col] = df[col].astype(str)
             except Exception as e:
