@@ -384,13 +384,13 @@ def main():
                     st.dataframe(risk_df.style.applymap(color_risk, subset=['Risk Level']))
                      # Export functionality
                         if st.button("Export Analysis"):
-                            excel_file = ReportGenerator.generate_excel_report(analysis_results)
-                            st.download_button(
-                                label="Download Detailed Report",
-                                data=excel_file,
-                                file_name=f"risk_analysis_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                            )
+                        excel_file = ReportGenerator.generate_excel_report(analysis_results)
+                        st.download_button(
+                            label="Download Detailed Report",
+                            data=excel_file,
+                            file_name=f"risk_analysis_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
                     
                     # Individual security details
                     st.subheader("Detailed Risk Analysis")
