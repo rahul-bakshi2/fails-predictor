@@ -383,7 +383,7 @@ def main():
                     
                     st.dataframe(risk_df.style.applymap(color_risk, subset=['Risk Level']))
                      # Export functionality
-                        if st.button("Export Analysis"):
+                    if st.button("Export Analysis"):
                         excel_file = ReportGenerator.generate_excel_report(analysis_results)
                         st.download_button(
                             label="Download Detailed Report",
