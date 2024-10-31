@@ -292,9 +292,9 @@ def main():
         # Try to get API key
         api_key = st.secrets.get("POLYGON_API_KEY", None)
         if not api_key:
-        st.error("POLYGON_API_KEY not found in secrets. Please check your configuration.")
-        st.info("Using demo mode with limited functionality.")
-        api_key = "demo_key"  # Fallback for testing
+            st.error("POLYGON_API_KEY not found in secrets. Please check your configuration.")
+            st.info("Using demo mode with limited functionality.")
+            api_key = "demo_key"  # Fallback for testing
     
     market_fetcher = MarketDataFetcher(api_key)
     risk_analyzer = RiskAnalyzer()   
