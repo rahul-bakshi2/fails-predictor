@@ -13,48 +13,42 @@ import ta
 class MarketDataFetcher:
     def __init__(self, api_key):
         self.api_key = api_key
-        self.base_url = "https://www.alphavantage.co/query"
+        self.base_url = "https://api.polygon.io"
         self.cache = {}
     
     def fetch_intraday_data(self, symbol):
-        """Fetch real-time market data from Alpha Vantage"""
-        # Check cache first
+        """Fetch real-time market data from Polygon.io"""
         if symbol in self.cache:
             return self.cache[symbol]
             
-        params = {
-            "function": "TIME_SERIES_INTRADAY",
-            "symbol": symbol,
-            "interval": "5min",
-            "apikey": self.api_key,
-            "outputsize": "full"
-        }
+        # Get today's date and previous trading day
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=1)
+        
+        url = f"{self.base_url}/v2/aggs/ticker/{symbol}/range/5/minute/{start_date.strftime('%Y-%m-%d')}/{end_date.strftime('%Y-%m-%d')}"
+        headers = {'Authorization': f'Bearer {self.api_key}'}
         
         try:
-            response = requests.get(self.base_url, params=params)
+            response = requests.get(url, headers=headers)
             data = response.json()
             
-            if "Time Series (5min)" not in data:
-                if "Note" in data:
-                    st.warning(f"API Limit Notice: {data['Note']}")
-                    return self._generate_mock_data(symbol)
-                st.error(f"Error fetching data for {symbol}: {data.get('Note', 'Unknown error')}")
+            if 'results' not in data:
+                st.warning(f"No data available for {symbol}, using simulated data")
                 return self._generate_mock_data(symbol)
                 
             # Convert to DataFrame
-            df = pd.DataFrame.from_dict(data["Time Series (5min)"], orient="index")
-            df.index = pd.to_datetime(df.index)
+            df = pd.DataFrame(data['results'])
+            df.index = pd.to_datetime(df['t'], unit='ms')
             df = df.rename(columns={
-                "1. open": "open",
-                "2. high": "high",
-                "3. low": "low",
-                "4. close": "close",
-                "5. volume": "volume"
+                'o': 'open',
+                'h': 'high',
+                'l': 'low',
+                'c': 'close',
+                'v': 'volume'
             })
             
-            # Convert to numeric
-            for col in df.columns:
-                df[col] = pd.to_numeric(df[col])
+            # Keep only necessary columns
+            df = df[['open', 'high', 'low', 'close', 'volume']]
             
             # Calculate additional metrics
             self._calculate_market_metrics(df)
@@ -67,6 +61,24 @@ class MarketDataFetcher:
         except Exception as e:
             st.error(f"Error fetching market data for {symbol}: {str(e)}")
             return self._generate_mock_data(symbol)
+    
+    def fetch_additional_data(self, symbol):
+        """Fetch additional market data from Polygon.io"""
+        url = f"{self.base_url}/v3/reference/tickers/{symbol}"
+        headers = {'Authorization': f'Bearer {self.api_key}'}
+        
+        try:
+            response = requests.get(url, headers=headers)
+            data = response.json()
+            
+            if 'results' not in data:
+                return None
+                
+            return data['results']
+            
+        except Exception as e:
+            st.error(f"Error fetching additional data for {symbol}: {str(e)}")
+            return None
     
     def _calculate_market_metrics(self, df):
         """Calculate market metrics for risk assessment"""
@@ -89,7 +101,7 @@ class MarketDataFetcher:
     
     def _generate_mock_data(self, symbol):
         """Generate mock data when API fails"""
-        st.warning(f"Using simulated data for {symbol} due to API limitations")
+        st.warning(f"Using simulated data for {symbol}")
         dates = pd.date_range(end=datetime.now(), periods=100, freq='5min')
         df = pd.DataFrame(index=dates)
         df['close'] = np.random.uniform(100, 200, len(dates))
@@ -277,7 +289,7 @@ def main():
     """)
     
     # Initialize components
-    api_key = st.secrets["ALPHA_VANTAGE_API_KEY"]
+    api_key = st.secrets["GagEdedMweleH8AEdqhMwNvxaz9rRq5f"]
     market_fetcher = MarketDataFetcher(api_key)
     risk_analyzer = RiskAnalyzer()
     
