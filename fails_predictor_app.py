@@ -10,6 +10,96 @@ import xlsxwriter
 from datetime import datetime, timedelta
 import ta
 
+class MarketDataFetcher:
+    def __init__(self, api_key):
+        self.api_key = api_key
+        self.base_url = "https://www.alphavantage.co/query"
+        self.cache = {}
+    
+    def fetch_intraday_data(self, symbol):
+        """Fetch real-time market data from Alpha Vantage"""
+        # Check cache first
+        if symbol in self.cache:
+            return self.cache[symbol]
+            
+        params = {
+            "function": "TIME_SERIES_INTRADAY",
+            "symbol": symbol,
+            "interval": "5min",
+            "apikey": self.api_key,
+            "outputsize": "full"
+        }
+        
+        try:
+            response = requests.get(self.base_url, params=params)
+            data = response.json()
+            
+            if "Time Series (5min)" not in data:
+                if "Note" in data:
+                    st.warning(f"API Limit Notice: {data['Note']}")
+                    return self._generate_mock_data(symbol)
+                st.error(f"Error fetching data for {symbol}: {data.get('Note', 'Unknown error')}")
+                return self._generate_mock_data(symbol)
+                
+            # Convert to DataFrame
+            df = pd.DataFrame.from_dict(data["Time Series (5min)"], orient="index")
+            df.index = pd.to_datetime(df.index)
+            df = df.rename(columns={
+                "1. open": "open",
+                "2. high": "high",
+                "3. low": "low",
+                "4. close": "close",
+                "5. volume": "volume"
+            })
+            
+            # Convert to numeric
+            for col in df.columns:
+                df[col] = pd.to_numeric(df[col])
+            
+            # Calculate additional metrics
+            self._calculate_market_metrics(df)
+            
+            # Cache the result
+            self.cache[symbol] = df
+            
+            return df
+            
+        except Exception as e:
+            st.error(f"Error fetching market data for {symbol}: {str(e)}")
+            return self._generate_mock_data(symbol)
+    
+    def _calculate_market_metrics(self, df):
+        """Calculate market metrics for risk assessment"""
+        # Volatility
+        df['returns'] = df['close'].pct_change()
+        df['volatility'] = df['returns'].rolling(window=12).std() * np.sqrt(12)
+        
+        # Volume metrics
+        df['volume_ma'] = df['volume'].rolling(window=20).mean()
+        df['relative_volume'] = df['volume'] / df['volume_ma']
+        
+        # Price metrics
+        df['price_range'] = (df['high'] - df['low']) / df['low']
+        df['average_trade_size'] = df['volume'] * df['close'] / df['volume'].count()
+        
+        # Liquidity indicator
+        df['spread'] = (df['high'] - df['low']) / df['close']
+        
+        return df
+    
+    def _generate_mock_data(self, symbol):
+        """Generate mock data when API fails"""
+        st.warning(f"Using simulated data for {symbol} due to API limitations")
+        dates = pd.date_range(end=datetime.now(), periods=100, freq='5min')
+        df = pd.DataFrame(index=dates)
+        df['close'] = np.random.uniform(100, 200, len(dates))
+        df['volume'] = np.random.uniform(1000, 10000, len(dates))
+        df['high'] = df['close'] * (1 + np.random.uniform(0, 0.02, len(dates)))
+        df['low'] = df['close'] * (1 - np.random.uniform(0, 0.02, len(dates)))
+        df['open'] = df['close'] * (1 + np.random.uniform(-0.01, 0.01, len(dates)))
+        self._calculate_market_metrics(df)
+        return df
+
 class PCFValidator:
     REQUIRED_COLUMNS = {
         'Ticker': str,
@@ -42,151 +132,89 @@ class PCFValidator:
         
         return df
 
-class PCFProcessor:
-    def __init__(self, market_fetcher):
-        self.market_fetcher = market_fetcher
-    
-    def process_pcf(self, uploaded_file):
-        """Process PCF file with enhanced validation and processing"""
-        try:
-            # Read PCF file
-            content = uploaded_file.getvalue().decode('utf-8')
-            df = pd.read_csv(StringIO(content))
-            
-            # Validate PCF format
-            df = PCFValidator.validate_pcf(df)
-            
-            # Add additional analysis columns
-            df['Risk_Category'] = 'Pending'
-            df['Liquidity_Score'] = 0.0
-            df['Market_Impact_Score'] = 0.0
-            df['Settlement_Risk_Score'] = 0.0
-            
-            return df
-            
-        except Exception as e:
-            st.error(f"Error processing PCF file: {str(e)}")
-            return None
-
-class BasketAnalyzer:
-    def __init__(self, market_fetcher, predictor):
-        self.market_fetcher = market_fetcher
-        self.predictor = predictor
-        
-    def analyze_basket(self, basket_df):
-        """Enhanced basket analysis with detailed metrics"""
-        results = []
-        summary_metrics = {
-            'total_market_value': basket_df['Market Value'].sum(),
-            'total_securities': len(basket_df),
-            'asset_class_breakdown': basket_df.groupby('Asset Class').size().to_dict(),
-            'high_risk_securities': 0,
-            'risk_by_asset_class': {},
-            'total_weight': basket_df['Weight of Holdings'].sum()
-        }
-        
-        # Progress bar
-        progress_bar = st.progress(0)
-        
-        for idx, row in basket_df.iterrows():
-            progress = (idx + 1) / len(basket_df)
-            progress_bar.progress(progress)
-            
-            # Get market data
-            market_data = self.market_fetcher.fetch_intraday_data(row['Ticker'])
-            if market_data is None:
-                continue
-            
-            # Calculate risk metrics
-            risk_score, risk_factors = self.calculate_security_risk(row, market_data)
-            
-            # Update high risk count
-            if risk_score > 0.7:
-                summary_metrics['high_risk_securities'] += 1
-            
-            # Track risk by asset class
-            asset_class = row['Asset Class']
-            if asset_class not in summary_metrics['risk_by_asset_class']:
-                summary_metrics['risk_by_asset_class'][asset_class] = {
-                    'count': 0,
-                    'high_risk_count': 0,
-                    'total_value': 0
-                }
-            
-            summary_metrics['risk_by_asset_class'][asset_class]['count'] += 1
-            if risk_score > 0.7:
-                summary_metrics['risk_by_asset_class'][asset_class]['high_risk_count'] += 1
-            summary_metrics['risk_by_asset_class'][asset_class]['total_value'] += row['Market Value']
-            
-            results.append({
-                'Ticker': row['Ticker'],
-                'Cusip': row['Cusip'],
-                'Securities Description': row['Securities Description'],
-                'Asset Class': row['Asset Class'],
-                'Weight': row['Weight of Holdings'],
-                'Shares': row['Shares'],
-                'Market Value': row['Market Value'],
-                'Risk_Score': risk_score,
-                'Risk_Factors': risk_factors,
-                'Market_Data': market_data
-            })
-        
-        progress_bar.empty()
-        
-        return {
-            'details': results,
-            'summary': summary_metrics
+class RiskAnalyzer:
+    def __init__(self):
+        self.risk_thresholds = {
+            'high_market_value': 1000000,  # $1M
+            'high_weight': 0.05,  # 5%
+            'low_liquidity': 0.3,
+            'high_volatility': 0.02
         }
     
-    def calculate_security_risk(self, security, market_data):
-        """Calculate comprehensive risk metrics for a security"""
+    def analyze_security(self, security_data, market_data):
+        """Calculate risk metrics for a single security"""
         risk_score = 0
         risk_factors = []
         
-        # Market impact risk
-        market_impact = (security['Market Value'] / 
-                        (market_data['volume'].mean() * market_data['close'].mean()))
-        
-        # Liquidity risk
-        avg_daily_volume = market_data['volume'].mean() * market_data['close'].mean()
-        liquidity_risk = security['Market Value'] / avg_daily_volume
-        
-        # Asset class specific risk
-        asset_class_risk = self.get_asset_class_risk(security['Asset Class'])
-        
-        # Weight concentration risk
-        weight_risk = security['Weight of Holdings'] > 0.05
-        
-        # Compile risk factors
-        if market_impact > 0.1:
+        # 1. Market Value Risk
+        if security_data['Market Value'] > self.risk_thresholds['high_market_value']:
+            risk_score += 0.3
             risk_factors.append({
-                'factor': 'Market Impact',
-                'risk_level': 'High' if market_impact > 0.2 else 'Medium',
-                'description': f'Trade size is {market_impact:.1%} of average daily volume',
-                'contribution': min(market_impact, 1.0)
-            })
-            
-        if liquidity_risk > 0.2:
-            risk_factors.append({
-                'factor': 'Liquidity',
-                'risk_level': 'High' if liquidity_risk > 0.4 else 'Medium',
-                'description': f'Position requires {liquidity_risk:.1f} days to liquidate',
-                'contribution': min(liquidity_risk/2, 1.0)
+                'factor': 'Market Value',
+                'level': 'High',
+                'description': f"Large position size: ${security_data['Market Value']:,.2f}"
             })
         
-        return sum(f['contribution'] for f in risk_factors)/len(risk_factors), risk_factors
+        # 2. Weight Risk
+        if security_data['Weight of Holdings'] > self.risk_thresholds['high_weight']:
+            risk_score += 0.2
+            risk_factors.append({
+                'factor': 'Position Weight',
+                'level': 'High',
+                'description': f"High concentration: {security_data['Weight of Holdings']:.1%}"
+            })
+        
+        # 3. Liquidity Risk
+        if market_data is not None:
+            avg_volume = market_data['volume'].mean()
+            days_to_liquidate = security_data['Shares'] / avg_volume
+            if days_to_liquidate > 1:
+                risk_score += 0.3
+                risk_factors.append({
+                    'factor': 'Liquidity',
+                    'level': 'High',
+                    'description': f"Would take {days_to_liquidate:.1f} days to liquidate"
+                })
+        
+        # 4. Asset Class Risk
+        asset_class_risk = self.get_asset_class_risk(security_data['Asset Class'])
+        risk_score += asset_class_risk['score']
+        risk_factors.append({
+            'factor': 'Asset Class',
+            'level': asset_class_risk['level'],
+            'description': asset_class_risk['description']
+        })
+        
+        return {
+            'risk_score': min(risk_score, 1.0),
+            'risk_factors': risk_factors
+        }
     
     @staticmethod
     def get_asset_class_risk(asset_class):
-        """Get risk factor based on asset class"""
-        risk_factors = {
-            'Equity': 0.3,
-            'Fixed Income': 0.5,
-            'ETF': 0.4,
-            'Option': 0.7,
-            'Default': 0.5
+        """Get risk metrics based on asset class"""
+        risk_metrics = {
+            'Equity': {
+                'score': 0.2,
+                'level': 'Medium',
+                'description': 'Standard equity settlement risk'
+            },
+            'Fixed Income': {
+                'score': 0.3,
+                'level': 'Medium-High',
+                'description': 'Extended settlement cycle risk'
+            },
+            'Options': {
+                'score': 0.4,
+                'level': 'High',
+                'description': 'Complex settlement requirements'
+            }
         }
-        return risk_factors.get(asset_class, risk_factors['Default'])
+        return risk_metrics.get(asset_class, {
+            'score': 0.25,
+            'level': 'Medium',
+            'description': 'Standard settlement risk'
+        })
 
 class ReportGenerator:
     @staticmethod
@@ -196,164 +224,205 @@ class ReportGenerator:
         
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             # Summary sheet
-            summary_data = {
-                'Metric': [
-                    'Total Market Value',
-                    'Total Securities',
-                    'High Risk Securities',
-                    'Total Weight'
-                ],
-                'Value': [
-                    f"${analysis_results['summary']['total_market_value']:,.2f}",
-                    analysis_results['summary']['total_securities'],
-                    analysis_results['summary']['high_risk_securities'],
-                    f"{analysis_results['summary']['total_weight']:.2%}"
-                ]
-            }
-            pd.DataFrame(summary_data).to_excel(writer, sheet_name='Summary', index=False)
+            summary_data = pd.DataFrame([{
+                'Metric': 'Total Securities',
+                'Value': analysis_results['summary']['total_securities']
+            }, {
+                'Metric': 'High Risk Securities',
+                'Value': analysis_results['summary']['high_risk_securities']
+            }, {
+                'Metric': 'Total Market Value',
+                'Value': f"${analysis_results['summary']['total_market_value']:,.2f}"
+            }])
             
-            # Asset Class Breakdown
-            asset_class_data = pd.DataFrame(analysis_results['summary']['risk_by_asset_class']).T
-            asset_class_data.to_excel(writer, sheet_name='Asset Class Analysis')
+            summary_data.to_excel(writer, sheet_name='Summary', index=False)
             
-            # Detailed Security Analysis
-            security_details = pd.DataFrame([
-                {
-                    'Ticker': r['Ticker'],
-                    'Description': r['Securities Description'],
-                    'Asset Class': r['Asset Class'],
-                    'Market Value': r['Market Value'],
-                    'Risk Score': r['Risk_Score'],
-                    'Risk Factors': '; '.join([f"{rf['factor']}: {rf['risk_level']}" 
-                                             for rf in r['Risk_Factors']])
-                }
-                for r in analysis_results['details']
-            ])
-            security_details.to_excel(writer, sheet_name='Security Details', index=False)
+            # Detailed Analysis
+            details_data = pd.DataFrame(analysis_results['details'])
+            details_data.to_excel(writer, sheet_name='Security Details', index=False)
             
-            # Format worksheets
+            # Formatting
             workbook = writer.book
-            
-            # Add formats
             header_format = workbook.add_format({
                 'bold': True,
                 'bg_color': '#D3D3D3',
                 'border': 1
             })
             
-            risk_format_high = workbook.add_format({
-                'bg_color': '#FFB6C1',
-                'border': 1
-            })
+            # Apply conditional formatting for risk scores
+            risk_format = workbook.add_format({'bg_color': '#FFB6C1'})
             
-            # Apply formats
-            for sheet in writer.sheets.values():
-                sheet.set_column('A:Z', 15)  # Set column width
-                sheet.conditional_format('A2:Z1000', {
-                    'type': 'formula',
-                    'criteria': '=$E2>0.7',
-                    'format': risk_format_high
-                })
+            worksheet = writer.sheets['Security Details']
+            worksheet.conditional_format('H2:H1000', {
+                'type': 'cell',
+                'criteria': '>=',
+                'value': 0.7,
+                'format': risk_format
+            })
         
         output.seek(0)
         return output
 
 def main():
     st.title("🏦 ETF Basket Trade Failure Risk Assessment")
+    st.markdown("""
+    Upload your PCF file to analyze potential trade failures and risk factors.
+    Required columns: Ticker, Cusip, Asset Class, Securities Description, Weight of Holdings, Shares, and Market Value
+    """)
     
     # Initialize components
     api_key = st.secrets["ALPHA_VANTAGE_API_KEY"]
     market_fetcher = MarketDataFetcher(api_key)
-    predictor = TradeFailurePredictor()
-    pcf_processor = PCFProcessor(market_fetcher)
-    basket_analyzer = BasketAnalyzer(market_fetcher, predictor)
+    risk_analyzer = RiskAnalyzer()
     
     # File upload
-    uploaded_file = st.file_uploader(
-        "Upload PCF File (CSV format)", 
-        type=['csv']
-    )
+    uploaded_file = st.file_uploader("Upload PCF File (CSV format)", type=['csv'])
     
     if uploaded_file is not None:
-        # Process PCF
-        basket_df = pcf_processor.process_pcf(uploaded_file)
-        
-        if basket_df is not None:
-            st.write("PCF File Preview:")
-            st.dataframe(basket_df.head())
+        try:
+            # Read and validate PCF
+            df = pd.read_csv(uploaded_file)
+            df = PCFValidator.validate_pcf(df)
             
-            if st.button("Analyze Basket Risk"):
-                with st.spinner("Analyzing basket..."):
-                    # Analyze basket
-                    analysis_results = basket_analyzer.analyze_basket(basket_df)
+            st.write("PCF File Preview:")
+            st.dataframe(df.head())
+            
+            if st.button("Analyze Risks"):
+                analysis_results = {'details': [], 'summary': {}}
+                failed_symbols = []
+                
+                # Progress bar
+                progress_text = "Analyzing securities..."
+                progress_bar = st.progress(0)
+                
+                # Analyze each security
+                total_securities = len(df)
+                high_risk_count = 0
+                
+                for idx, row in df.iterrows():
+                    # Update progress
+                    progress = (idx + 1) / total_securities
+                    progress_bar.progress(progress)
                     
-                    # Display summary metrics
-                    st.header("Basket Summary")
-                    col1, col2, col3, col4 = st.columns(4)
+                    # Fetch market data
+                    market_data = market_fetcher.fetch_intraday_data(row['Ticker'])
                     
-                    with col1:
-                        st.metric(
-                            "Total Securities",
-                            analysis_results['summary']['total_securities']
-                        )
-                    with col2:
-                        st.metric(
-                            "Total Value",
-                            f"${analysis_results['summary']['total_market_value']:,.2f}"
-                        )
-                    with col3:
-                        st.metric(
-                            "High Risk Securities",
-                            analysis_results['summary']['high_risk_securities']
-                        )
-                    with col4:
-                        st.metric(
-                            "Total Weight",
-                            f"{analysis_results['summary']['total_weight']:.2%}"
-                        )
+                    # Analyze risks
+                    risk_analysis = risk_analyzer.analyze_security(row, market_data)
                     
-                    # Asset Class Breakdown
-                    st.subheader("Asset Class Analysis")
-                    fig = go.Figure(data=[
-                        go.Bar(
-                            x=list(analysis_results['summary']['asset_class_breakdown'].keys()),
-                            y=list(analysis_results['summary']['asset_class_breakdown'].values())
-                        )
-                    ])
-                    st.plotly_chart(fig)
+                    if risk_analysis['risk_score'] >= 0.7:
+                        high_risk_count += 1
                     
-                    # Risk Analysis Table
-                    st.subheader("Security Risk Analysis")
-                    risk_df = pd.DataFrame([
-                        {
-                            'Ticker': r['Ticker'],
-                            'Description': r['Securities Description'],
-                            'Asset Class': r['Asset Class'],
-                            'Market Value': r['Market Value'],
-                            'Risk Score': r['Risk_Score']
-                        }
-                        for r in analysis_results['details']
-                    ])
+                    analysis_results['details'].append({
+                        'Ticker': row['Ticker'],
+                        'Description': row['Securities Description'],
+                        'Asset Class': row['Asset Class'],
+                        'Market Value': row['Market Value'],
+                        'Weight': row['Weight of Holdings'],
+                        'Risk Score': risk_analysis['risk_score'],
+                        'Risk Factors': risk_analysis['risk_factors']
+                    })
+                
+                # Clear progress bar
+                progress_bar.empty()
+                
+                # Summary metrics
+                analysis_results['summary'] = {
+                    'total_securities': total_securities,
+                    'high_risk_securities': high_risk_count,
+                    'total_market_value': df['Market Value'].sum()
+                }
+                
+                # Display results
+                st.header("Analysis Results")
+                
+                # Summary metrics
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total Securities", total_securities)
+                with col2:
+                    st.metric("High Risk Securities", high_risk_count)
+                with col3:
+                    st.metric("High Risk Percentage", f"{(high_risk_count/total_securities)*100:.1f}%")
+                
+                # Risk table
+                st.subheader("Security Risk Analysis")
+                risk_df = pd.DataFrame([{
+                    'Ticker': r['Ticker'],
+                    'Description': r['Description'],
+                    'Asset Class': r['Asset Class'],
+                    'Market Value': f"${r['Market Value']:,.2f}",
+                    'Risk Score': f"{r['Risk Score']:.2f}",
+                    'Risk Level': 'High' if r['Risk Score'] >= 0.7 else 'Medium' if r['Risk Score'] >= 0.4 else 'Low'
+                } for r in analysis_results['details']])
+                
+                # Color code the risk levels
+                def color_risk(val):
+                    if 'High' in str(val):
+                        return 'background-color: #FFB6C1'
+                    elif 'Medium' in str(val):
+                        return 'background-color: #FFE4B5'
+                    return ''
+                
+                st.dataframe(risk_df.style.applymap(color_risk, subset=['Risk Level']))
+                
+                # Export button
+                if st.button("Export Analysis"):
+                    excel_file = ReportGenerator.generate_excel_report(analysis_results)
+                    st.download_button(
+                        label="Download Detailed Report",
+                        data=excel_file,
+                        file_name=f"risk_analysis_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+                
+                 # Individual security details
+                st.subheader("Detailed Risk Analysis")
+                for security in analysis_results['details']:
+                    # Color code based on risk score
+                    risk_color = (
+                        "🔴" if security['Risk Score'] >= 0.7 else 
+                        "🟡" if security['Risk Score'] >= 0.4 else 
+                        "🟢"
+                    )
                     
-                    # Color-coded risk display
-                    def color_risk(val):
-                        if val > 0.7:
-                            return 'background-color: #FFB6C1'
-                        elif val > 0.4:
-                            return 'background-color: #FFE4B5'
-                        return ''
-                    
-                    st.dataframe(risk_df.style.applymap(color_risk, subset=['Risk Score']))
-                    
-                    # Export functionality
-                    if st.button("Export Analysis"):
-                        excel_file = ReportGenerator.generate_excel_report(analysis_results)
-                        st.download_button(
-                            label="Download Detailed Report",
-                            data=excel_file,
-                            file_name=f"basket_analysis_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                        )
+                    if security['Risk Score'] >= 0.4:  # Show only medium and high risk securities
+                        with st.expander(f"{risk_color} {security['Ticker']} - {security['Description']}"):
+                            col1, col2 = st.columns(2)
+                            
+                            with col1:
+                                st.metric(
+                                    "Risk Score", 
+                                    f"{security['Risk Score']:.2f}",
+                                    delta="High Risk" if security['Risk Score'] >= 0.7 else "Medium Risk",
+                                    delta_color="inverse"
+                                )
+                                st.metric(
+                                    "Market Value", 
+                                    f"${security['Market Value']:,.2f}"
+                                )
+                            
+                            with col2:
+                                st.metric("Asset Class", security['Asset Class'])
+                                st.metric(
+                                    "Weight", 
+                                    f"{security['Weight']:.2%}"
+                                )
+                            
+                            st.subheader("Risk Factors")
+                            for factor in security['Risk Factors']:
+                                with st.container():
+                                    if factor['level'] == 'High':
+                                        st.error(f"**{factor['factor']}**: {factor['description']}")
+                                    elif factor['level'] == 'Medium':
+                                        st.warning(f"**{factor['factor']}**: {factor['description']}")
+                                    else:
+                                        st.info(f"**{factor['factor']}**: {factor['description']}")
+
+        except Exception as e:
+            st.error(f"Error processing file: {str(e)}")
+            st.write("Please ensure your PCF file has all required columns:")
+            st.write(", ".join(PCFValidator.REQUIRED_COLUMNS.keys()))
 
 if __name__ == "__main__":
     main()
