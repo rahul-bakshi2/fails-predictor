@@ -286,10 +286,18 @@ def main():
     """)
     
     try:
-        # Initialize components
-        api_key = st.secrets["POLYGON_API_KEY"]
-        market_fetcher = MarketDataFetcher(api_key)
-        risk_analyzer = RiskAnalyzer()
+        # Debug: Print available secrets
+        st.write("Available secrets:", st.secrets.keys())
+    
+    # Initialize components
+    api_key = st.secrets.get("POLYGON_API_KEY")
+    if not api_key:
+        st.error("POLYGON_API_KEY not found in secrets. Please check your configuration.")
+        st.info("Using demo mode with limited functionality.")
+        api_key = "demo_key"  # Fallback for testing
+    
+    market_fetcher = MarketDataFetcher(api_key)
+    risk_analyzer = RiskAnalyzer()   
         
         # File upload
         uploaded_file = st.file_uploader("Upload PCF File (CSV format)", type=['csv'])
